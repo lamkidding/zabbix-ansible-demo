@@ -1,0 +1,11 @@
+---
+- name: "Phase 3 — Configure Zabbix via API"
+  hosts: localhost
+  gather_facts: false
+  tags: [configure]
+  vars_files:
+    - ../group_vars/all.yml
+    - ../group_vars/vault.yml
+
+  roles:
+    - role: zabbix_config

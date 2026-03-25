@@ -1,0 +1,50 @@
+---
+# -----------------------------------------------------------------------
+# Deploy simulated devices (SNMP + Agent sidecar each)
+# -----------------------------------------------------------------------
+
+# --- ConfigMaps from .snmprec files -------------------------------------
+
+- name: Create device ConfigMap
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "snmpdata-{{ item.type }}"
+        namespace: "{{ zabbix_namespace }}"
+        labels: { app: zabbix, component: device, device: "{{ item.name }}" }
+      data:
+        public.snmprec: "{{ lookup('file', role_path + '/files/' + item.type + '.snmprec') }}"
+  loop: "{{ devices }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# --- Device Deployments + Services --------------------------------------
+
+- name: Deploy device
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    src: "{{ playbook_dir }}/../manifests/devices/{{ item.type }}.yml"
+  loop: "{{ devices }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# --- Wait for readiness -------------------------------------------------
+
+- name: Wait for device readiness
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig_path }}"
+    kind: Deployment
+    name: "device-{{ item.name }}"
+    namespace: "{{ zabbix_namespace }}"
+  register: dev
+  until: (dev.resources[0].status.readyReplicas | default(0)) >= 1
+  retries: 30
+  delay: 10
+  loop: "{{ devices }}"
+  loop_control:
+    label: "{{ item.name }}"

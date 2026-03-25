@@ -1,0 +1,54 @@
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: zabbix
+  labels: { app: zabbix, component: postgres }
+spec:
+  serviceName: postgres-svc
+  replicas: 1
+  selector:
+    matchLabels: { app: zabbix, component: postgres }
+  template:
+    metadata:
+      labels: { app: zabbix, component: postgres }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              valueFrom: { secretKeyRef: { name: zabbix-db-secret, key: db-name } }
+            - name: POSTGRES_USER
+              valueFrom: { secretKeyRef: { name: zabbix-db-secret, key: db-user } }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: zabbix-db-secret, key: db-password } }
+          resources:
+            requests: { cpu: "250m", memory: "256Mi" }
+            limits:   { cpu: "1",    memory: "512Mi" }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "zabbix"] }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          volumeMounts:
+            - { name: pgdata, mountPath: /var/lib/postgresql/data }
+  volumeClaimTemplates:
+    - metadata: { name: pgdata }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: 5Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-svc
+  namespace: zabbix
+  labels: { app: zabbix, component: postgres }
+spec:
+  type: ClusterIP
+  ports:
+    - { port: 5432, targetPort: 5432, name: pg }
+  selector: { app: zabbix, component: postgres }

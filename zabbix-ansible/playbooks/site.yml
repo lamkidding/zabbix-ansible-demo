@@ -1,0 +1,23 @@
+---
+# Master playbook — full end-to-end deployment
+#
+#   ansible-playbook playbooks/site.yml --ask-vault-pass
+#
+# Skip dependency install if tools are already present:
+#   ansible-playbook playbooks/site.yml --ask-vault-pass --skip-tags deps
+
+- name: "Phase 0 — Install dependencies (podman, k3s, kubectl)"
+  import_playbook: 00_install_deps.yml
+  tags: [deps]
+
+- name: "Phase 1 — Deploy Zabbix stack (PostgreSQL + Server + Web + Proxy)"
+  import_playbook: 01_deploy_stack.yml
+  tags: [stack, deploy]
+
+- name: "Phase 2 — Deploy simulated network devices"
+  import_playbook: 02_deploy_devices.yml
+  tags: [devices, deploy]
+
+- name: "Phase 3 — Configure Zabbix via API (proxy, hosts, triggers)"
+  import_playbook: 03_configure_zabbix.yml
+  tags: [configure]

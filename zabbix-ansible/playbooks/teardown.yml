@@ -1,0 +1,15 @@
+---
+- name: "Teardown — Remove all Zabbix resources"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../group_vars/all.yml
+    - ../group_vars/vault.yml
+
+  tasks:
+    - name: Delete zabbix namespace (cascades to all resources)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: absent
+        kind: Namespace
+        name: "{{ zabbix_namespace }}"

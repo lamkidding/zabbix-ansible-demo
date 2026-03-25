@@ -1,0 +1,149 @@
+---
+# -----------------------------------------------------------------------
+# Dependency installer — detects OS and installs podman, k3d, k3s, kubectl
+# -----------------------------------------------------------------------
+
+- name: Detect operating system
+  ansible.builtin.set_fact:
+    is_macos: "{{ ansible_facts['os_family'] | default(lookup('pipe', 'uname')) == 'Darwin' }}"
+
+# ===== macOS (Homebrew + podman machine + k3d) ==========================
+
+- name: macOS — Install podman, k3d, kubectl via Homebrew
+  when: is_macos | bool
+  block:
+    - name: Install Homebrew packages
+      ansible.builtin.command: brew install podman k3d kubectl
+      register: brew_out
+      changed_when: "'already installed' not in brew_out.stderr"
+      failed_when: brew_out.rc != 0
+
+    - name: Initialise podman machine (if not present)
+      ansible.builtin.command: podman machine init --cpus 4 --memory 6144 --rootful
+      register: pm_init
+      changed_when: pm_init.rc == 0
+      failed_when: false
+
+    - name: Check if podman machine is rootful
+      ansible.builtin.command: podman machine inspect --format {% raw %}'{{.Rootful}}'{% endraw %}
+      register: rootful_check
+      changed_when: false
+
+    - name: Enable rootful mode (required by k3d)
+      when: "'true' not in rootful_check.stdout"
+      block:
+        - name: Stop podman machine for rootful switch
+          ansible.builtin.command: podman machine stop
+          failed_when: false
+
+        - name: Set rootful mode
+          ansible.builtin.command: podman machine set --rootful
+          register: rootful_set
+
+        - name: Start podman machine (rootful)
+          ansible.builtin.command: podman machine start
+          register: pm_start_rootful
+          retries: 2
+          delay: 5
+          until: pm_start_rootful.rc == 0
+
+    - name: Start podman machine (if already rootful)
+      ansible.builtin.command: podman machine start
+      when: "'true' in rootful_check.stdout"
+      register: pm_start
+      changed_when: pm_start.rc == 0
+      failed_when: false
+
+    - name: Get podman socket path
+      ansible.builtin.command: podman machine inspect --format {% raw %}'{{.ConnectionInfo.PodmanSocket.Path}}'{% endraw %}
+      register: podman_socket_raw
+      changed_when: false
+
+    - name: Set podman socket fact
+      ansible.builtin.set_fact:
+        podman_socket: "{{ podman_socket_raw.stdout | trim }}"
+
+    - name: Show podman socket path
+      ansible.builtin.debug:
+        msg: "Podman socket: {{ podman_socket }}"
+
+    - name: Check if k3d cluster already exists
+      ansible.builtin.command: k3d cluster list {{ k3d_cluster_name }} --no-headers
+      environment:
+        DOCKER_HOST: "unix://{{ podman_socket }}"
+      register: k3d_list
+      changed_when: false
+      failed_when: false
+
+    - name: Create k3s cluster via k3d (podman backend)
+      ansible.builtin.command: >
+        k3d cluster create {{ k3d_cluster_name }}
+        --api-port 6443
+        -p "30080:30080@server:0"
+        --wait --timeout 180s
+      environment:
+        DOCKER_HOST: "unix://{{ podman_socket }}"
+      register: k3d_create
+      when: k3d_list.rc != 0
+      timeout: 240
+
+    - name: Merge k3d kubeconfig
+      ansible.builtin.command: >
+        k3d kubeconfig merge {{ k3d_cluster_name }}
+        --kubeconfig-merge-default
+      environment:
+        DOCKER_HOST: "unix://{{ podman_socket }}"
+      changed_when: true
+
+# ===== Linux (native podman + k3s) =====================================
+
+- name: Linux — Install podman and k3s
+  when: not (is_macos | bool)
+  block:
+    - name: Install podman
+      ansible.builtin.package:
+        name: podman
+        state: present
+      become: true
+
+    - name: Install k3s
+      ansible.builtin.shell: |
+        curl -sfL https://get.k3s.io | sh -s - \
+          --write-kubeconfig-mode 644 \
+          --disable traefik
+      args:
+        creates: /usr/local/bin/k3s
+      become: true
+
+    - name: Copy k3s kubeconfig
+      ansible.builtin.shell: |
+        mkdir -p ~/.kube
+        sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+        sudo chown $(id -u):$(id -g) ~/.kube/config
+      args:
+        creates: "{{ ansible_env.HOME }}/.kube/config"
+
+# ===== Common — Python packages + Ansible collections ==================
+
+- name: Install Python dependencies
+  ansible.builtin.pip:
+    name:
+      - kubernetes
+      - psycopg2-binary
+      - zabbix-utils
+    state: present
+
+- name: Install Ansible Galaxy collections
+  ansible.builtin.command: >
+    ansible-galaxy collection install -r
+    {{ playbook_dir }}/../requirements.yml --force
+  changed_when: true
+
+- name: Verify cluster is reachable
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig_path }}"
+    kind: Node
+  register: nodes
+  until: nodes.resources | length > 0
+  retries: 12
+  delay: 10

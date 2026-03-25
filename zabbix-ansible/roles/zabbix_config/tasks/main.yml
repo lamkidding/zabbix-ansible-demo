@@ -1,0 +1,201 @@
+---
+# -----------------------------------------------------------------------
+# Zabbix API configuration — proxy, hosts, templates, triggers
+# Uses community.zabbix 4.x httpapi connection model
+# -----------------------------------------------------------------------
+
+# --- Wait for API (runs with local connection) -------------------------
+
+- name: Wait for Zabbix API
+  ansible.builtin.uri:
+    url: "{{ zabbix_api_url }}/api_jsonrpc.php"
+    method: POST
+    body_format: json
+    body: { jsonrpc: "2.0", method: "apiinfo.version", params: [], id: 1 }
+    status_code: 200
+  register: api
+  until: api.status == 200
+  retries: 24
+  delay: 5
+
+# --- Change default Admin password if still set to "zabbix" -----------
+
+- name: Check if default password still works
+  ansible.builtin.uri:
+    url: "{{ zabbix_api_url }}/api_jsonrpc.php"
+    method: POST
+    body_format: json
+    body:
+      jsonrpc: "2.0"
+      method: "user.login"
+      params:
+        username: "{{ zabbix_api_user }}"
+        password: "zabbix"
+      id: 1
+    status_code: 200
+  register: default_login
+  failed_when: false
+
+- name: Change Admin password from default
+  when: default_login.json.result is defined
+  block:
+    - name: Get auth token with default creds
+      ansible.builtin.set_fact:
+        zabbix_auth_token: "{{ default_login.json.result }}"
+
+    - name: Fetch Admin user ID
+      ansible.builtin.uri:
+        url: "{{ zabbix_api_url }}/api_jsonrpc.php"
+        method: POST
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          method: "user.get"
+          params:
+            filter: { username: "{{ zabbix_api_user }}" }
+          auth: "{{ zabbix_auth_token }}"
+          id: 2
+        status_code: 200
+      register: admin_user
+
+    - name: Update Admin password via API
+      ansible.builtin.uri:
+        url: "{{ zabbix_api_url }}/api_jsonrpc.php"
+        method: POST
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          method: "user.update"
+          params:
+            userid: "{{ admin_user.json.result[0].userid }}"
+            passwd: "{{ zabbix_admin_password }}"
+            current_passwd: "zabbix"
+          auth: "{{ zabbix_auth_token }}"
+          id: 3
+        status_code: 200
+      register: pw_change
+
+    - name: Confirm password changed
+      ansible.builtin.debug:
+        msg: "Admin password updated to vault value"
+      when: pw_change.json.result is defined
+
+# --- All Zabbix module tasks use httpapi connection --------------------
+
+- name: Configure Zabbix via API
+  vars:
+    ansible_network_os: community.zabbix.zabbix
+    ansible_connection: httpapi
+    ansible_httpapi_port: 30080
+    ansible_httpapi_use_ssl: false
+    ansible_httpapi_validate_certs: false
+    ansible_zabbix_url_path: ""
+    ansible_host: localhost
+    ansible_user: "{{ zabbix_api_user }}"
+    ansible_httpapi_pass: "{{ zabbix_admin_password }}"
+  block:
+    # --- Host groups ---------------------------------------------------
+
+    - name: Create host groups
+      community.zabbix.zabbix_group:
+        host_groups:
+          - "Proxy-Devices"
+          - "Routers"
+          - "Switches"
+          - "Firewalls"
+          - "Servers"
+        state: present
+
+    # --- Register proxy ------------------------------------------------
+
+    - name: Register Zabbix Proxy
+      community.zabbix.zabbix_proxy:
+        proxy_name: "{{ zabbix_proxy_name }}"
+        state: present
+        operating_mode: active
+        description: "Secure-network proxy — monitors 4 devices"
+
+    # --- Register devices as hosts -------------------------------------
+    # Templates per device are defined in group_vars/all.yml.
+    # Network devices use "Network Generic Device by SNMP" (LLD for
+    # interfaces). Dummybox adds "Linux by SNMP" for CPU/memory.
+    # Threshold macros are overridden at host level below.
+
+    - name: Register hosts
+      community.zabbix.zabbix_host:
+        host_name: "{{ item.name }}"
+        visible_name: "{{ item.visible_name }}"
+        host_groups:
+          - "Proxy-Devices"
+          - "{{ item.group }}"
+        link_templates: "{{ item.templates }}"
+        monitored_by: proxy
+        proxy: "{{ zabbix_proxy_name }}"
+        interfaces:
+          - type: snmp
+            main: 1
+            dns: "device-{{ item.name }}-svc"
+            port: "161"
+            details:
+              version: 2
+              community: "{{ snmp_community }}"
+              bulk: 1
+          - type: agent
+            main: 1
+            dns: "device-{{ item.name }}-svc"
+            port: "10050"
+        macros:
+          - macro: "{$IF.UTIL.MAX}"
+            value: "{{ ((thresholds.traffic_warning_bps | int) / 1000000) | int }}"
+            description: "Max bandwidth utilisation threshold (%)"
+          - macro: "{$IF.ERRORS.WARN}"
+            value: "{{ thresholds.error_warning_count }}"
+            description: "Interface error rate threshold"
+          - macro: "{$IFCONTROL}"
+            value: "1"
+            description: "Enable link-down triggers for all interfaces"
+          - macro: "{$SNMP_COMMUNITY}"
+            value: "{{ snmp_community }}"
+            description: "SNMP community string"
+          - macro: "{$NET.IF.IFOPERSTATUS.NOT_MATCHES}"
+            value: "^$"
+            description: "Match all interfaces for monitoring"
+        status: enabled
+        state: present
+      loop: "{{ devices }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # --- Enable Zabbix server self-monitoring via agent2 sidecar ----------
+    # The default "Zabbix server" host already has an agent interface at
+    # 127.0.0.1:10050. We just enable it and link monitoring templates.
+
+    - name: Enable Zabbix server self-monitoring
+      community.zabbix.zabbix_host:
+        host_name: "Zabbix server"
+        host_groups:
+          - "Zabbix servers"
+        link_templates:
+          - "Zabbix server health"
+          - "Linux by Zabbix agent"
+        status: enabled
+        state: present
+        force: false
+
+    # --- Alert action --------------------------------------------------
+
+    - name: Create alert notification action
+      community.zabbix.zabbix_action:
+        name: "Proxy device alerts"
+        event_source: trigger
+        state: present
+        status: enabled
+        esc_period: 60
+        conditions:
+          - type: trigger_severity
+            operator: ">="
+            value: "Warning"
+        operations:
+          - type: send_message
+            send_to_users:
+              - "Admin"

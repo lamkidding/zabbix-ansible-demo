@@ -1,0 +1,11 @@
+---
+- name: "Phase 2 — Deploy simulated network devices"
+  hosts: localhost
+  gather_facts: false
+  tags: [devices]
+  vars_files:
+    - ../group_vars/all.yml
+    - ../group_vars/vault.yml
+
+  roles:
+    - role: devices

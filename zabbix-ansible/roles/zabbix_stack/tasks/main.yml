@@ -1,0 +1,102 @@
+---
+# -----------------------------------------------------------------------
+# Phase 1+2: Namespace + Secret + PostgreSQL + Zabbix Server + Zabbix Web
+# -----------------------------------------------------------------------
+
+- name: Create namespace
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    src: "{{ playbook_dir }}/../manifests/namespace.yml"
+
+- name: Create DB secret
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: zabbix-db-secret
+        namespace: "{{ zabbix_namespace }}"
+      type: Opaque
+      data:
+        db-name: "{{ postgres_db | b64encode }}"
+        db-user: "{{ postgres_user | b64encode }}"
+        db-password: "{{ postgres_password | b64encode }}"
+
+# --- PostgreSQL ---------------------------------------------------------
+
+- name: Apply PostgreSQL
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    src: "{{ playbook_dir }}/../manifests/postgres.yml"
+
+- name: Wait for PostgreSQL
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig_path }}"
+    kind: StatefulSet
+    name: postgres
+    namespace: "{{ zabbix_namespace }}"
+  register: pg
+  until: (pg.resources[0].status.readyReplicas | default(0)) >= 1
+  retries: 30
+  delay: 10
+
+# --- Zabbix Server ------------------------------------------------------
+
+- name: Apply Zabbix Server
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    src: "{{ playbook_dir }}/../manifests/zabbix-server.yml"
+
+- name: Wait for Zabbix Server
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig_path }}"
+    kind: Deployment
+    name: zabbix-server
+    namespace: "{{ zabbix_namespace }}"
+  register: srv
+  until: (srv.resources[0].status.readyReplicas | default(0)) >= 1
+  retries: 30
+  delay: 10
+
+# --- Zabbix Web ---------------------------------------------------------
+
+- name: Apply Zabbix Web
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    src: "{{ playbook_dir }}/../manifests/zabbix-web.yml"
+
+- name: Wait for Zabbix Web
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig_path }}"
+    kind: Deployment
+    name: zabbix-web
+    namespace: "{{ zabbix_namespace }}"
+  register: web
+  until: (web.resources[0].status.readyReplicas | default(0)) >= 1
+  retries: 30
+  delay: 10
+
+# --- Zabbix Proxy -------------------------------------------------------
+
+- name: Apply Zabbix Proxy
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    src: "{{ playbook_dir }}/../manifests/zabbix-proxy.yml"
+
+- name: Wait for Zabbix Proxy
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig_path }}"
+    kind: Deployment
+    name: zabbix-proxy
+    namespace: "{{ zabbix_namespace }}"
+  register: proxy
+  until: (proxy.resources[0].status.readyReplicas | default(0)) >= 1
+  retries: 30
+  delay: 10

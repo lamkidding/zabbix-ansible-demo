@@ -1,0 +1,11 @@
+---
+- name: "Phase 0 — Install dependencies"
+  hosts: localhost
+  gather_facts: true
+  tags: [deps]
+  vars_files:
+    - ../group_vars/all.yml
+    - ../group_vars/vault.yml
+
+  roles:
+    - role: deps

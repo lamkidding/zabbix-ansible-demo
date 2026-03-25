@@ -1,0 +1,74 @@
+---
+# ---------------------------------------------------------------------------
+# Cluster
+# ---------------------------------------------------------------------------
+zabbix_namespace: zabbix
+kubeconfig_path: "~/.kube/config"
+k3d_cluster_name: zabbix
+
+# ---------------------------------------------------------------------------
+# PostgreSQL
+# ---------------------------------------------------------------------------
+postgres_db: zabbix
+postgres_user: zabbix
+postgres_password: "{{ vault_postgres_password }}"
+
+# ---------------------------------------------------------------------------
+# Zabbix credentials
+# ---------------------------------------------------------------------------
+zabbix_api_url: "http://localhost:30080"
+zabbix_api_user: Admin
+zabbix_admin_password: "{{ vault_zabbix_password }}"
+
+# ---------------------------------------------------------------------------
+# Zabbix Proxy
+# ---------------------------------------------------------------------------
+zabbix_proxy_name: "proxy-secure-net"
+
+# ---------------------------------------------------------------------------
+# SNMP
+# ---------------------------------------------------------------------------
+snmp_community: "public"
+
+# ---------------------------------------------------------------------------
+# Simulated devices (assessment: 3 network + 1 server via proxy)
+# ---------------------------------------------------------------------------
+devices:
+  - name: router-01
+    type: router
+    visible_name: "Edge Router R1"
+    group: "Routers"
+    templates:
+      - "Network Generic Device by SNMP"
+  - name: switch-01
+    type: switch
+    visible_name: "Core Switch SW1"
+    group: "Switches"
+    templates:
+      - "Network Generic Device by SNMP"
+  - name: firewall-01
+    type: firewall
+    visible_name: "Perimeter FW1"
+    group: "Firewalls"
+    templates:
+      - "Network Generic Device by SNMP"
+  - name: dummybox
+    type: dummybox
+    visible_name: "Dummy Linux Server"
+    group: "Servers"
+    templates:
+      - "Linux by SNMP"
+
+# ---------------------------------------------------------------------------
+# Alert thresholds (assessment: configurable thresholds)
+# ---------------------------------------------------------------------------
+thresholds:
+  iface_down_severity: high
+  traffic_warning_bps: 80000000
+  traffic_recovery_bps: 60000000
+  error_warning_count: 10
+  error_recovery_count: 5
+  cpu_critical_pct: 90
+  cpu_recovery_pct: 80
+  mem_warning_pct: 85
+  mem_recovery_pct: 75

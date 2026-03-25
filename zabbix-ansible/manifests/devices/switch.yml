@@ -1,0 +1,58 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: device-switch-01
+  namespace: zabbix
+  labels: { app: zabbix, component: device, device: switch-01 }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: zabbix, device: switch-01 }
+  template:
+    metadata:
+      labels: { app: zabbix, component: device, device: switch-01 }
+    spec:
+      containers:
+        - name: snmpsim
+          image: tandrup/snmpsim:latest
+          ports:
+            - { containerPort: 1161, protocol: UDP, name: snmp }
+          command: ["snmpsimd.py"]
+          args:
+            - "--data-dir=/usr/local/share/snmpsim/data"
+            - "--agent-udpv4-endpoint=0.0.0.0:1161"
+            - "--process-user=nobody"
+            - "--process-group=nogroup"
+          volumeMounts:
+            - { name: snmpdata, mountPath: /usr/local/share/snmpsim/data }
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits:   { cpu: "200m", memory: "128Mi" }
+        - name: zabbix-agent2
+          image: zabbix/zabbix-agent2:7.0-ubuntu-latest
+          ports:
+            - { containerPort: 10050, name: agent }
+          env:
+            - { name: ZBX_HOSTNAME, value: switch-01 }
+            - { name: ZBX_SERVER_HOST, value: zabbix-proxy-svc }
+            - { name: ZBX_PASSIVE_ALLOW_LIST, value: zabbix-proxy-svc }
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits:   { cpu: "200m", memory: "128Mi" }
+      volumes:
+        - name: snmpdata
+          configMap: { name: snmpdata-switch }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: device-switch-01-svc
+  namespace: zabbix
+  labels: { app: zabbix, device: switch-01 }
+spec:
+  type: ClusterIP
+  ports:
+    - { port: 161, targetPort: 1161, protocol: UDP, name: snmp }
+    - { port: 10050, targetPort: 10050, protocol: TCP, name: agent }
+  selector: { app: zabbix, device: switch-01 }

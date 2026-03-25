@@ -1,0 +1,11 @@
+---
+- name: "Phase 1 — Deploy Zabbix stack"
+  hosts: localhost
+  gather_facts: false
+  tags: [stack]
+  vars_files:
+    - ../group_vars/all.yml
+    - ../group_vars/vault.yml
+
+  roles:
+    - role: zabbix_stack

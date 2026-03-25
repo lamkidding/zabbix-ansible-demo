@@ -1,0 +1,65 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zabbix-server
+  namespace: zabbix
+  labels: { app: zabbix, component: server }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: zabbix, component: server }
+  template:
+    metadata:
+      labels: { app: zabbix, component: server }
+    spec:
+      containers:
+        - name: zabbix-server
+          image: zabbix/zabbix-server-pgsql:7.0-ubuntu-latest
+          ports:
+            - { containerPort: 10051, name: trapper }
+          env:
+            - { name: DB_SERVER_HOST, value: postgres-svc }
+            - name: POSTGRES_DB
+              valueFrom: { secretKeyRef: { name: zabbix-db-secret, key: db-name } }
+            - name: POSTGRES_USER
+              valueFrom: { secretKeyRef: { name: zabbix-db-secret, key: db-user } }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: zabbix-db-secret, key: db-password } }
+            - { name: ZBX_STARTPINGERS, value: "5" }
+            - { name: ZBX_STARTSNMPTRAPPER, value: "1" }
+          resources:
+            requests: { cpu: "500m", memory: "512Mi" }
+            limits:   { cpu: "2",    memory: "1Gi"   }
+          livenessProbe:
+            tcpSocket: { port: 10051 }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket: { port: 10051 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+        - name: zabbix-agent2
+          image: zabbix/zabbix-agent2:7.0-ubuntu-latest
+          ports:
+            - { containerPort: 10050, name: agent }
+          env:
+            - { name: ZBX_HOSTNAME, value: "Zabbix server" }
+            - { name: ZBX_SERVER_HOST, value: "127.0.0.1" }
+            - { name: ZBX_PASSIVE_ALLOW_LIST, value: "127.0.0.1" }
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits:   { cpu: "200m", memory: "128Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zabbix-server-svc
+  namespace: zabbix
+  labels: { app: zabbix, component: server }
+spec:
+  type: ClusterIP
+  ports:
+    - { port: 10051, targetPort: 10051, name: trapper }
+    - { port: 10050, targetPort: 10050, protocol: TCP, name: agent }
+  selector: { app: zabbix, component: server }
